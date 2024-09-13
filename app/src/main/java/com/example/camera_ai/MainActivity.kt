@@ -19,6 +19,10 @@ import org.tensorflow.lite.support.image.ImageProcessor
 import org.tensorflow.lite.support.image.TensorImage
 import org.tensorflow.lite.support.image.ops.ResizeOp
 import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
+import java.io.FileInputStream
+import java.io.IOException
+import java.nio.MappedByteBuffer
+import java.nio.channels.FileChannel
 
 class MainActivity : AppCompatActivity(), View.OnClickListener {
 
@@ -30,9 +34,18 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-
         val cameraButton = findViewById<Button>(R.id.cameraButton)
         cameraButton.setOnClickListener(this)
+
+        // Initialize the TFLite model in a try-catch block for error handling
+        try {
+            interpreter = Interpreter(loadModelFile("pop_3_5_24_yolov8n_float32.tflite"))
+            Toast.makeText(this, "Model Loaded", Toast.LENGTH_LONG).show()
+            println("Model loaded");
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Failed to load model", Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onClick(v: View?) {
@@ -40,10 +53,8 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
             R.id.cameraButton -> {
                 // Check for camera permission
                 if (checkCameraPermission()) {
-                    // Permission granted, open camera
                     openCamera()
                 } else {
-                    // Request permission
                     requestCameraPermission()
                 }
             }
@@ -83,15 +94,22 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_CODE_CAMERA_PERMISSION) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                // Permission granted, open camera
                 openCamera()
             } else {
-                // Permission denied, inform user
                 Toast.makeText(this, "Camera permission denied", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
+    @Throws(IOException::class)
+    private fun loadModelFile(modelFileName: String): MappedByteBuffer {
+        val assetFileDescriptor = assets.openFd(modelFileName)
+        val fileInputStream = FileInputStream(assetFileDescriptor.fileDescriptor)
+        val fileChannel = fileInputStream.channel
+        val startOffset = assetFileDescriptor.startOffset
+        val declaredLength = assetFileDescriptor.declaredLength
+        return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+    }
 
     @SuppressLint("SetTextI18n")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -104,24 +122,40 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
     }
 
     private fun processCameraImage(bitmap: Bitmap) {
-        // Resize and preprocess the image for the model
-        val imageProcessor = ImageProcessor.Builder()
-            .add(ResizeOp(320, 320, ResizeOp.ResizeMethod.BILINEAR))
-            .build()
+        try {
+            // Resize and preprocess the image for the model
+            val imageProcessor = ImageProcessor.Builder()
+                .add(ResizeOp(320, 320, ResizeOp.ResizeMethod.BILINEAR))
+                .build()
 
-        val tensorImage = TensorImage.fromBitmap(bitmap)
-        val processedImage = imageProcessor.process(tensorImage)
+            val tensorImage = TensorImage(DataType.FLOAT32)
+            tensorImage.load(bitmap)
+            val processedImage = imageProcessor.process(tensorImage)
 
-        // Run inference on the processed image
-        val outputBuffer = TensorBuffer.createFixedSize(intArrayOf(1, 25200, 85), DataType.FLOAT32)
-        interpreter.run(processedImage.buffer, outputBuffer.buffer.rewind())
+            // Run inference on the processed image
+            val outputBuffer = TensorBuffer.createFixedSize(intArrayOf(1, 25200, 85), DataType.FLOAT32)
+            interpreter.run(processedImage.buffer, outputBuffer.buffer.rewind())
 
+            // Process the output for bounding boxes, etc.
+            val outputArray = outputBuffer.floatArray
+            parseYOLOOutput(outputArray)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Error during image processing", Toast.LENGTH_SHORT).show()
+        }
     }
 
+    private fun parseYOLOOutput(outputArray: FloatArray) {
+        // Placeholder for post-processing logic (e.g., extract bounding boxes, labels, and scores)
+        Toast.makeText(this, "Model inference complete", Toast.LENGTH_SHORT).show()
+
+        // TODO: Implement actual parsing and display of bounding boxes, confidence, and class labels.
+    }
 
     override fun onDestroy() {
         super.onDestroy()
         // Close interpreter when no longer needed
-        interpreter.close()
-    }
-}
+        if (::interpreter.isInitialized) {
+            interpreter.close()
+        }
+    }}
